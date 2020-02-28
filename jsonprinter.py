@@ -127,7 +127,7 @@ class JsonPrinter:
             else: hasHidden = True; break
 
         if hasHidden: result += '...'
-        if items.newline: result += '\n'+intend
+        if items.newline and not firstItem: result += '\n'+intend
         result += '}'
         return result
 
@@ -140,7 +140,7 @@ class JsonPrinter:
                 result += self.__printItem('', item, intend+self.shift*' ', flags, firstItem=firstItem)
                 firstItem = False
 
-        if items.newline: result += '\n'+intend
+        if items.newline and not firstItem: result += '\n'+intend
         result += ']'
         return result
 
