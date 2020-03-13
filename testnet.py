@@ -158,12 +158,13 @@ def _cleos(arguments, *, output=False, retry=None, logger=None):
       try:
         return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
       except subprocess.CalledProcessError as e:
-        if logger: logger.formatError(e)
         import sys
         (exception, traceback) = (e, sys.exc_info()[2])
 
       if retry is None or retry <= 1:
-          raise CleosException.fromCalledProcessError(exception).with_traceback(traceback)
+          err = CleosException.fromCalledProcessError(exception).with_traceback(traceback)
+          if logger: logger.formatError(err)
+          raise err
       else: retry -= 1
 
 
@@ -354,7 +355,7 @@ def createAccount(creator, account, owner_auth, active_auth=None, **kwargs):
 
 def getAccount(account, **kwargs):
     try:
-        acc = json.loads(cleos('get account -j {acc}'.format(acc=account), **kwargs))
+        acc = json.loads(cleos('get account -j {acc}'.format(acc=account), **kwargs, output=False))
         perm = {}
         for p in acc['permissions']:
             perm[p['perm_name']] = p
@@ -407,7 +408,7 @@ def randomText(length):
     return ''.join(random.choice(letters) for i in range(length))
 
 def createKey():
-    data = cleos("create key --to-console")
+    data = cleos("create key --to-console", output=False)
     m = re.search('Private key: ([a-zA-Z0-9]+)\nPublic key: ([a-zA-Z0-9]+)', data)
     return (m.group(1), m.group(2))
 
@@ -415,11 +416,12 @@ def importPrivateKey(private):
     cleos("wallet import --name test --private-key %s" % private)
 
 def getRandomAccount():
-    while True:
+    retry = 32
+    while retry:
         name = randomName()
-        try: getAccount(name)
-        except: break
-    return name
+        if getAccount(name) is None: return name
+        retry -= 1
+    raise BaseException("Can't create random account: Retries exceeded")
 
 def createRandomAccount(owner_auth, active_auth=None, *, creator='tech', **kwargs):
     name = getRandomAccount()
