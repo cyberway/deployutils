@@ -6,6 +6,11 @@ import re
 import random
 import time
 
+import requests
+import base64
+import hashlib
+import binascii
+
 from pymongo import MongoClient
 from copy import deepcopy
 import pymongo
@@ -201,7 +206,7 @@ def pushAction(code, action, actor, args, *, additional='', delay=None, expirati
 
 def unpackActionData(code, action, data):
     if len(data) == 0: return {}
-    args = _cleos('convert unpack_action_data {code} {action} "{data}"'.format(code=code, action=action, data=data))
+    args = _cleos('convert unpack_action_data {code} {action} "{data}"'.format(code=code, action=action, data=data), output=False)
     return json.loads(args)
 
 
@@ -218,15 +223,10 @@ def parseAuthority(auth):
         d.extend(['active'])
     return {'actor':d[0], 'permission':d[1]}
 
-def createAction(contract, action, actors, args):
-    data = cleos("convert pack_action_data {contract} {action} {args}".format(
-            contract=contract, action=action, args=jsonArg(args))).rstrip()
-    return {
-        'account':contract,
-        'name':action,
-        'authorization':parseAuthority(actors if type(actors)==type([]) else [actors]),
-        'data':data
-    }
+
+class RequestException(BaseException):
+    def __init__(self, response):
+        super().__init__(self, response.json()['error']['what'])
 
 class Trx:
     def __init__(self, expiration=None, delay_sec=None):
@@ -235,15 +235,55 @@ class Trx:
             additional += ' --expiration {exp}'.format(exp=expiration)
         if delay_sec:
             additional += ' --delay-sec {sec}'.format(sec=delay_sec)
-        self.trx = pushAction('cyber', 'checkwin', 'cyber', {}, additional=additional)
+        self.trx = pushAction('cyber', 'checkwin', 'cyber', {}, additional=additional, output=False)
         self.trx['actions'] = []
 
     def addAction(self, contract, action, actors, args):
-        self.trx['actions'].append(createAction(contract, action, actors, args))
+        self.trx['actions'].append(self._createAction(contract, action, actors, args))
 
     def getTrx(self):
         return self.trx
 
+    @staticmethod
+    def _createAction(contract, action, actors, args):
+        data = cleos("convert pack_action_data {contract} {action} {args}".format(
+                contract=contract, action=action, args=jsonArg(args)), output=False).rstrip()
+        return {
+            'account':contract,
+            'name':action,
+            'authorization':parseAuthority(actors if type(actors)==type([]) else [actors]),
+            'data':data
+        }
+
+class ABI:
+    @staticmethod
+    def getHashFromChain(host, account):
+        r = requests.post(host+'/v1/chain/get_raw_abi', json={'account_name':account})
+        if r.status_code != 200: raise RequestException(r)
+        data = r.json()
+        if not data['abi']: return None
+        return data['abi_hash']
+
+    @staticmethod
+    def getHashFromFile(filename):
+        result = cleos('set abi cyber.null {path}'.format(path=os.path.relpath(filename)),
+                additional=' --dont-broadcast --skip-sign --suppress-duplicate-check', output=False)
+        trx = json.loads(result[result.find('{'):])
+        args = unpackActionData('cyber', 'setabi', trx['actions'][0]['data'])
+        return hashlib.sha256(binascii.unhexlify(args['abi'])).hexdigest()
+
+class Code:
+    @staticmethod
+    def getHashFromChain(host, account):
+        r = requests.post(host+'/v1/chain/get_code_hash', json={'account_name':account})
+        if r.status_code != 200: raise RequestException(r)
+        codehash = r.json()['code_hash']
+        return codehash if codehash != 64*' ' else None
+
+    @staticmethod
+    def getHashFromFile(filename):
+        with open(filename, 'rb') as fd:
+            return hashlib.sha256(fd.read()).hexdigest()
 
 def createAndExecProposal(commun_code, permission, trx, leaders, clientKey, *, providebw=None, output=None, jsonPrinter=None):
     (proposer, proposerKey) = leaders[0]
@@ -312,13 +352,18 @@ def createAccount(creator, account, owner_auth, active_auth=None, **kwargs):
     return cleos('create account {creator} {acc} {owner} {active}'.format(creator=creator_auth['actor'], acc=account, owner=owner_auth, active=active_auth), 
             additional=additional, **kwargs)
 
-def getAccount(account):
-    acc = json.loads(cleos('get account -j {acc}'.format(acc=account)))
-    perm = {}
-    for p in acc['permissions']:
-        perm[p['perm_name']] = p
-    acc['permissions'] = perm
-    return acc
+def getAccount(account, **kwargs):
+    try:
+        acc = json.loads(cleos('get account -j {acc}'.format(acc=account), **kwargs))
+        perm = {}
+        for p in acc['permissions']:
+            perm[p['perm_name']] = p
+        acc['permissions'] = perm
+        return acc
+    except CleosException as err:
+        if err.output.find('Unable to find key in ChainDB multi-index') != -1:
+            return None
+        else: raise
 
 def updateAuth(account, permission, parent, keyList, accounts, **kwargs):
     actor = account + ('@owner' if permission == 'owner' else '')
