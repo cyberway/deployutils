@@ -90,7 +90,7 @@ class TestCase(unittest.TestCase):
         if isinstance(error, CleosException):
             print('    ', error.output.replace('\n', '\n    '), sep='')
         else:
-            print('    ', error.replace('\n', '\n    '), sep='')
+            print('    ', str(error).replace('\n', '\n    '), sep='')
     
     def _processItem(self, mItem, items, predicat, data, mapping):
         subitem = items[mItem.index]
