@@ -33,5 +33,5 @@ abiItems = Items(atnewline=True).line() \
 
 abi = json.load(sys.stdin)
 
-printer = JsonPrinter(Console())
+printer = JsonPrinter(Console(), maxstrlength=None)
 print(printer.format(abiItems, abi))
